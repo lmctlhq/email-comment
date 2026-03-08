@@ -21,7 +21,7 @@ Lambda (UI + API handler)
     │
     └──► SES       (notify owner)
 
-Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
+Route53: lmctl.com → SES domain identity (3 DKIM CNAMEs, Easy DKIM)
 ```
 
 ---
@@ -33,7 +33,8 @@ Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
 - `GET /`                      — serve comment form HTML (static, embedded in function)
 - `POST /comments`             — accept new comment submission
 - `GET /comments?slug=<slug>`  — return approved comments for a page (JSON)
-- `GET /admin/approve?id=<id>&token=<secret>` — approve a comment (token-protected, Phase 1; GET so email links work directly)
+- `GET /admin/approve?id=<id>&token=<secret>`  — serve confirmation page (safe for email links; no state change)
+- `POST /admin/approve?id=<id>&token=<secret>` — perform approval (state change only triggered by explicit form submit)
 - Deployed behind API Gateway HTTP API (cheaper, simpler than REST API)
 
 ### 2. DynamoDB
@@ -58,10 +59,9 @@ Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
 - Verified sending domain: `lmctl.com`
 - Sender address: `noreply@lmctl.com`
 - Notification email sent to owner on every new submission
-- **SES domain identity verification** requires adding SES-provided DNS records to Route53:
-  - One TXT record (domain ownership verification)
-  - Three CNAME records (DKIM signing)
-- MX record on `lmctl.com` is for receiving / custom MAIL FROM — it is separate from sending verification and is not sufficient on its own
+- **SES domain identity verification** (Easy DKIM) requires adding three SES-provided CNAME records to Route53; SES marks the identity verified once they propagate
+- A separate TXT domain-verification record is not required with Easy DKIM
+- MX record on `lmctl.com` is for receiving / custom MAIL FROM — separate from sending verification
 
 ### 4. API Gateway
 - HTTP API type (not REST API — lower cost, sufficient for this use case)
@@ -69,7 +69,7 @@ Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
 
 ### 5. Route53 / DNS
 - MX record on `lmctl.com` is pre-existing (for receiving email)
-- **Additional records required for SES sending**: TXT verification record + 3 DKIM CNAME records — all added via Route53 during SES domain identity setup
+- **Additional records required for SES sending**: 3 DKIM CNAME records (Easy DKIM) — added via Route53 during SES domain identity setup; no separate TXT record required
 
 ---
 
@@ -83,7 +83,9 @@ Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
        Subject: "New comment on <slug>"
        Body:    name, message, approval link
 5. Owner clicks approval link  →  GET /admin/approve?id=<id>&token=<secret>
-6. Lambda sets approved=true in DynamoDB
+       Lambda returns confirmation page: "Approve this comment? [Approve]"
+6. Owner clicks Approve button  →  POST /admin/approve?id=<id>&token=<secret>
+       Lambda sets approved=true in DynamoDB
 7. Comment appears on page via GET /comments?slug=<slug>
 ```
 
@@ -92,7 +94,7 @@ Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
 ## Recommendations for Missing Requirements
 
 ### Moderation
-- **Phase 1**: Approval link (`GET /admin/approve?id=<id>&token=<secret>`) embedded in owner notification email; clicking it directly approves the comment
+- **Phase 1**: Approval link (`GET /admin/approve?id=<id>&token=<secret>`) embedded in owner notification email; clicking opens a confirmation page; explicit button click (`POST`) performs the approval — safe against mail-client link prefetching
 - **Phase 2**: Minimal admin UI page if volume grows
 
 ### Spam Protection
@@ -121,7 +123,7 @@ Route53: lmctl.com → SES domain identity (TXT + DKIM CNAMEs via Route53)
 
 - **IaC**: AWS SAM (`template.yaml`) — single file defines all resources
 - Resources defined: Lambda function, API Gateway HTTP API, DynamoDB table, IAM role
-- SES domain identity setup required: add TXT + 3 DKIM CNAME records to Route53 (done once via SES console or AWS CLI)
+- SES domain identity setup required: add 3 DKIM CNAME records (Easy DKIM) to Route53 (done once via SES console or AWS CLI)
 - Deploy: `sam build && sam deploy --guided`
 
 ### Environment Variables (Lambda)
